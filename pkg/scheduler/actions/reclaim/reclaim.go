@@ -174,11 +174,23 @@ func (ra *Action) Execute(ssn *framework.Session) {
 				continue
 			}
 
+			victimsQueue := util.NewPriorityQueue(func(l, r interface{}) bool {
+				lv := l.(*api.TaskInfo)
+				rv := r.(*api.TaskInfo)
+				if lv.Job != rv.Job {
+					return !ssn.JobOrderFn(ssn.Jobs[lv.Job], ssn.Jobs[rv.Job])
+				}
+				return !ssn.TaskOrderFn(l, r)
+			})
+			for _, victim := range victims {
+				victimsQueue.Push(victim)
+			}
 			resreq := task.InitResreq.Clone()
 			reclaimed := api.EmptyResource()
 
 			// Reclaim victims for tasks.
-			for _, reclaimee := range victims {
+			for !victimsQueue.Empty() {
+				reclaimee := victimsQueue.Pop().(*api.TaskInfo)
 				klog.Errorf("Try to reclaim Task <%s/%s> for Tasks <%s/%s>",
 					reclaimee.Namespace, reclaimee.Name, task.Namespace, task.Name)
 				if err := ssn.Evict(reclaimee, "reclaim"); err != nil {
