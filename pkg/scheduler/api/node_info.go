@@ -21,6 +21,7 @@ import (
 	"strconv"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 	k8sframework "k8s.io/kubernetes/pkg/scheduler/framework"
 
@@ -73,7 +74,7 @@ type NodeInfo struct {
 
 	// Used to store custom information
 	Others map[string]interface{}
-	//SharedDevices map[string]SharedDevicePool
+	// SharedDevices map[string]SharedDevicePool
 
 	// enable node resource oversubscription
 	OversubscriptionNode bool
@@ -342,11 +343,19 @@ func (ni *NodeInfo) SetNode(node *v1.Node) {
 
 // setNodeOthersResource initialize sharable devices
 func (ni *NodeInfo) setNodeOthersResource(node *v1.Node) {
-	IgnoredDevicesList = []string{}
-	ni.Others[GPUSharingDevice] = gpushare.NewGPUDevices(ni.Name, node)
-	ni.Others[vgpu.DeviceName] = vgpu.NewGPUDevices(ni.Name, node)
-	IgnoredDevicesList = append(IgnoredDevicesList, ni.Others[GPUSharingDevice].(Devices).GetIgnoredDevices()...)
-	IgnoredDevicesList = append(IgnoredDevicesList, ni.Others[vgpu.DeviceName].(Devices).GetIgnoredDevices()...)
+	set := sets.NewString()
+	set.Insert(IgnoredDevicesList...)
+
+	if gpuShareDevices := gpushare.NewGPUDevices(ni.Name, node); gpuShareDevices != nil {
+		ni.Others[GPUSharingDevice] = gpuShareDevices
+		set.Insert(gpuShareDevices.GetIgnoredDevices()...)
+	}
+	if vgpuDevices := vgpu.NewGPUDevices(ni.Name, node); vgpuDevices != nil {
+		ni.Others[vgpu.DeviceName] = vgpuDevices
+		set.Insert(vgpuDevices.GetIgnoredDevices()...)
+	}
+
+	IgnoredDevicesList = set.List()
 }
 
 // setNode sets kubernetes node object to nodeInfo object without assertion
@@ -489,14 +498,30 @@ func (ni *NodeInfo) RemoveTask(ti *TaskInfo) error {
 
 // addResource is used to add sharable devices
 func (ni *NodeInfo) addResource(pod *v1.Pod) {
-	ni.Others[GPUSharingDevice].(Devices).AddResource(pod)
-	ni.Others[vgpu.DeviceName].(Devices).AddResource(pod)
+	for _, val := range ni.Others {
+		if val == nil {
+			continue
+		}
+		devices, ok := val.(Devices)
+		if !ok {
+			continue
+		}
+		devices.AddResource(pod)
+	}
 }
 
 // subResource is used to substract sharable devices
 func (ni *NodeInfo) subResource(pod *v1.Pod) {
-	ni.Others[GPUSharingDevice].(Devices).SubResource(pod)
-	ni.Others[vgpu.DeviceName].(Devices).SubResource(pod)
+	for _, val := range ni.Others {
+		if val == nil {
+			continue
+		}
+		devices, ok := val.(Devices)
+		if !ok {
+			continue
+		}
+		devices.SubResource(pod)
+	}
 }
 
 // UpdateTask is used to update a task in nodeInfo object.
